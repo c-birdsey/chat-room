@@ -1,0 +1,11 @@
+README file for assignment 7:
+
+authors:
+    Calder Birdsey 
+
+known bugs: 
+    -issues with removing clients when they disconnect (only if its the first_client that connected)-- will continue to debug 
+    -when server closes, clients terminate as well but prints out message to stdout saying 'Terminated.' is this okay?
+
+sources:
+- 
