@@ -16,7 +16,7 @@
 #include <signal.h>
 #include <time.h>
 
-#define BUF_SIZE 4096
+#define BUF_SIZE 4096 
 
 //prototypes
 void * client_reciever(void * fd); 
@@ -109,6 +109,6 @@ client_reciever(void * fd) {
         memset(msg, 0, BUF_SIZE); 
     }   
     write(1, "Connection closed by remote host.\n", 35); 
-    kill(sender_pid, SIGTERM); 
+    kill(sender_pid, SIGINT); 
     return NULL; 
 }

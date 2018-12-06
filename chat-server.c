@@ -27,8 +27,8 @@
 /* STRUCT AND INTIALIZER */
 struct client {
     int fd;
-    char *remote_ip; 
-    uint16_t remote_port; 
+    char remote_ip[15]; 
+    char remote_port[15]; 
     char nickname[45];  
     struct client * next_client; 
 }; 
@@ -44,7 +44,7 @@ char *check_nickname(char *msg);
 void *change_nickname(struct client *client_data, char *nick_name); 
 void *print_clients(); //for testing
 
-pthread_mutex_t mutex; 
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER; 
 
 int 
 main(int argc, char *argv[]){
@@ -56,9 +56,9 @@ main(int argc, char *argv[]){
     uint16_t remote_port;
     socklen_t addrlen;
     char *remote_ip; 
-    //int bytes_received;
-    //char buf[BUF_SIZE];
     listen_port = argv[1];
+
+
 
     //intialized head of linked list of clients
     if (first_client == NULL) {
@@ -95,10 +95,12 @@ main(int argc, char *argv[]){
     while(1) {
         // accept a new connection
         addrlen = sizeof(remote_sa);
-        conn_fd = accept(listen_fd, (struct sockaddr *) &remote_sa, &addrlen);
-        //CHECK ACCEPT 
-
-        // announce connection 
+        if((conn_fd = accept(listen_fd, (struct sockaddr *) &remote_sa, &addrlen)) == -1) {
+            perror("accept"); 
+            exit(4); 
+        }
+    
+        //announce connection 
         remote_ip = inet_ntoa(remote_sa.sin_addr);
         remote_port = ntohs(remote_sa.sin_port);
         printf("new connection from %s:%d\n", remote_ip, remote_port);
@@ -130,7 +132,7 @@ reciever(void *client) {
     char ip[15]; 
     char port[15]; 
     char cur_nickname[45];  
-    snprintf(port, 15, "%d", client_data->remote_port); 
+    snprintf(port, 15, "%s", client_data->remote_port); 
     snprintf(ip, 15, "%s", client_data->remote_ip);
 
     while((bytes_received = recv(conn_fd, message, BUF_SIZE, 0)) > 0) {
@@ -139,13 +141,12 @@ reciever(void *client) {
         snprintf(cur_nickname, 45, "%s", client_data->nickname); 
 
         //check for nick name command 
-        if(strncmp(message, "/nick", 5) == 0) {
+        if(strncmp(message, "/nick", 5) == 0) { 
             //parse out nickname 
             nick_name = (strchr(message, ' ') + 1); 
-            strtok(nick_name, "\n"); 
 
             //compose nickname message
-            char nickname_msg[sizeof(cur_nickname) + sizeof(nick_name) + 36]; 
+            char nickname_msg[sizeof(cur_nickname) + sizeof(nick_name) + 37]; 
             snprintf(nickname_msg, sizeof(nickname_msg), "%s is now known as %s.", cur_nickname, nick_name); 
 
             //write message to server output
@@ -196,25 +197,31 @@ reciever(void *client) {
 void *
 send_all(char *msg, int size) {
     pthread_mutex_lock(&mutex);
-    struct client * cur_client = first_client; 
-    while(1) {
-        send(cur_client->fd, msg, size, 0); 
-        if (cur_client->next_client == NULL) {
-            break; 
-        }
-        cur_client = cur_client->next_client; 
+    if(first_client->fd == -1){ //if no clients connected, do not send 
+        pthread_mutex_unlock(&mutex);
+        return NULL; 
+    }
+    struct client *cur_client;
+    for (cur_client = first_client; cur_client; cur_client = cur_client->next_client){
+        if((send(cur_client->fd, msg, size, 0)) == -1) {
+            perror("send");
+            pthread_mutex_unlock(&mutex); 
+            exit(5); 
+        } 
     }
     pthread_mutex_unlock(&mutex);
     return NULL; 
 }
 
 struct client *
-add_client(int fd, char *ip, uint16_t port){ //when mutex locks are added this fuction doesn't finish
+add_client(int fd, char *ip, uint16_t port){ 
+    pthread_mutex_lock(&mutex);
     if(first_client->fd == -1) {
         first_client->fd = fd; 
         snprintf(first_client->nickname, 45, "User unknown (%s:%d)", ip, port); 
-        first_client->remote_ip = ip; 
-        first_client->remote_port = port; 
+        snprintf(first_client->remote_ip, 15, "%s", ip); 
+        snprintf(first_client->remote_port, 15, "%d", port); 
+        pthread_mutex_unlock(&mutex);
         return first_client; 
     }
     struct client *cur_client = first_client; 
@@ -224,27 +231,32 @@ add_client(int fd, char *ip, uint16_t port){ //when mutex locks are added this f
     struct client *new_client = malloc(sizeof(struct client)); 
     new_client->fd = fd; 
     snprintf(new_client->nickname, 45, "User unknown (%s:%d)", ip, port); 
-    new_client->remote_ip = ip; 
-    new_client->remote_port = port; 
+    snprintf(new_client->remote_ip, 15, "%s", ip); 
+    snprintf(new_client->remote_port, 15, "%d", port); 
     new_client->next_client = NULL; 
-    cur_client->next_client = new_client; 
-    //print_clients(); 
+    cur_client->next_client = new_client;  
+    pthread_mutex_unlock(&mutex);
     return new_client;
 }
 
 void *
-remove_client(int fd) { /****** DEBUG *****/
-    //print_clients();
+remove_client(int fd) {
     pthread_mutex_lock(&mutex);
     if(first_client->fd == fd) {
         if(first_client->next_client == NULL) {
             first_client->fd = -1; 
-            return NULL; 
+            pthread_mutex_unlock(&mutex);
+            return NULL;
         }
-        first_client->fd = (first_client->next_client)->fd; 
-        first_client->next_client = (first_client->next_client)->next_client; 
-        free(first_client->next_client); 
-        return NULL; 
+        struct client *next = first_client->next_client; 
+        first_client->fd = next->fd; 
+        first_client->next_client = next->next_client; 
+        snprintf(first_client->remote_port, sizeof(next->remote_port), "%s", next->remote_port); 
+        snprintf(first_client->nickname, sizeof(next->nickname), "%s", next->nickname); 
+        snprintf(first_client->remote_ip, sizeof(next->remote_ip), "%s", next->remote_ip); 
+        free(next);
+        pthread_mutex_unlock(&mutex);
+        return NULL;
     }
     struct client *cur = first_client; 
     struct client *last;  
@@ -255,8 +267,15 @@ remove_client(int fd) { /****** DEBUG *****/
     last->next_client = cur->next_client; 
     free(cur);
     pthread_mutex_unlock(&mutex);
-    //print_clients(); 
     return NULL;
+}
+
+void *
+change_nickname(struct client *client_data, char *nick_name) {
+    pthread_mutex_lock(&mutex);
+    snprintf(client_data->nickname, 45, "%s", nick_name); 
+    pthread_mutex_unlock(&mutex);
+    return NULL; 
 }
 
 void *
@@ -268,16 +287,9 @@ print_clients() { //for testing
         printf("next: %p\n", (void *) cur->next_client); 
         printf("nickname: %s\n", cur->nickname); 
         printf("ip: %s\n", cur->remote_ip); 
-        printf("port: %d\n", cur->remote_port);
+        printf("port: %s\n", cur->remote_port);
         cur = cur->next_client; 
     }
     return NULL; 
 }
 
-void *
-change_nickname(struct client *client_data, char *nick_name) {
-    pthread_mutex_lock(&mutex);
-    snprintf(client_data->nickname, 45, "%s", nick_name); 
-    pthread_mutex_unlock(&mutex);
-    return NULL; 
-}
