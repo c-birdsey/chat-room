@@ -30,8 +30,6 @@ main(int argc, char *argv[]) {
     struct addrinfo hints, *res;
     int conn_fd;
     int rc;
-    //char buf[BUF_SIZE];
-    //int n;
 
     dest_hostname = argv[1];
     dest_port = argv[2];
@@ -54,7 +52,7 @@ main(int argc, char *argv[]) {
     // connect to server and check for connect error 
     if(connect(conn_fd, res->ai_addr, res->ai_addrlen) < 0) {
         perror("connect");
-        exit(2);
+        exit(3);
     }
     printf("Connected\n");
 
@@ -64,10 +62,9 @@ main(int argc, char *argv[]) {
     pthread_t reciever;
     pthread_create(&reciever, NULL, client_reciever, &conn_fd);
 
-    //pthread_join(reciever, NULL);
     pthread_join(sender, NULL);
    
-    //close
+    //close_
     pthread_cancel(reciever); 
     close(conn_fd);
     pthread_exit(NULL); 
@@ -78,13 +75,23 @@ client_sender(void * fd) {
     int n;
     char buf[BUF_SIZE];
     int conn_fd = *((int *) fd);
-    sender_pid = getpid(); 
 
-    while((n = read(0, buf, BUF_SIZE)) > 0) { //fgets?
+    while((n = read(0, buf, BUF_SIZE)) > 0) {
+        if(n == -1) {
+            perror("read"); 
+            exit(4); 
+        }
+        //handle empty inputs
+        if (strcmp(buf, "\n") == 0) {
+            buf[0] = ' '; 
+        } 
         //send to server
-        send(conn_fd, buf, n, 0); 
+        if ((send(conn_fd, buf, n, 0)) == -1) {
+            perror("send"); 
+            exit(5); 
+        }
     }  
-    write(1, "Exiting.\n", 10); 
+    printf("Exiting.\n"); 
     return NULL;
 } 
 
@@ -96,7 +103,10 @@ client_reciever(void * fd) {
     
     //print messages recieved from server 
     while((bytes_recieved = recv(conn_fd, msg, BUF_SIZE, 0)) > 0) {
-        fflush(stdout);
+        if(bytes_recieved == -1) {
+            perror("recv"); 
+            exit(6); 
+        }
         //get time
         const time_t cur_time = time(NULL); 
         struct tm *local_time = localtime(&cur_time); 
@@ -104,11 +114,10 @@ client_reciever(void * fd) {
         //print data recieved
         char time[11]; 
         strftime(time, 11, "%H:%M:%S: ", local_time);
-        write(1, time, sizeof(time));
-        puts(msg);
-        memset(msg, 0, BUF_SIZE); 
-    }   
-    write(1, "Connection closed by remote host.\n", 35); 
-    kill(sender_pid, SIGINT); 
+        printf("%s%s\n", time, msg);
+    }
+    printf("Connection closed by remote host.");
+    fflush(stdout);  
+    kill(sender_pid, SIGINT);
     return NULL; 
 }

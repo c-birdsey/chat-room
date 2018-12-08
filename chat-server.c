@@ -8,7 +8,7 @@
  * strncopy(3)
  * snprintf(3)
 */
- 
+  
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -40,7 +40,8 @@ struct client *add_client(int fd, char * ip, uint16_t port);
 void *remove_client(int fd); 
 void *reciever(void *client_data); 
 void *send_all(char *message, int size);
-char *check_nickname(char *msg); 
+void nickname_handler(struct client *client_data, char *message, char *cur_nickname); 
+void discon_handler(char *cur_nickname, char *ip, char *port); 
 void *change_nickname(struct client *client_data, char *nick_name); 
 void *print_clients(); //for testing
 
@@ -57,8 +58,6 @@ main(int argc, char *argv[]){
     socklen_t addrlen;
     char *remote_ip; 
     listen_port = argv[1];
-
-
 
     //intialized head of linked list of clients
     if (first_client == NULL) {
@@ -122,11 +121,10 @@ main(int argc, char *argv[]){
 
 void *
 reciever(void *client) {
-    int bytes_received;
+    int bytes_recieved;
     char message[BUF_SIZE];
     struct client * client_data = (struct client *) client; 
     int conn_fd = client_data->fd; 
-    char *nick_name; 
     
     //extract needed data from struct 
     char ip[15]; 
@@ -135,36 +133,22 @@ reciever(void *client) {
     snprintf(port, 15, "%s", client_data->remote_port); 
     snprintf(ip, 15, "%s", client_data->remote_ip);
 
-    while((bytes_received = recv(conn_fd, message, BUF_SIZE, 0)) > 0) {
+    while((bytes_recieved = recv(conn_fd, message, BUF_SIZE, 0)) > 0) {
+        if(bytes_recieved == -1) {
+            perror("recv"); 
+            exit(5); 
+        }
         fflush(stdout);
         strtok(message, "\n"); 
         snprintf(cur_nickname, 45, "%s", client_data->nickname); 
 
-        //check for nick name command 
+        //check for nick name command and call nickname handler
         if(strncmp(message, "/nick", 5) == 0) { 
-            //parse out nickname 
-            nick_name = (strchr(message, ' ') + 1); 
-
-            //compose nickname message
-            char nickname_msg[sizeof(cur_nickname) + sizeof(nick_name) + 37]; 
-            snprintf(nickname_msg, sizeof(nickname_msg), "%s is now known as %s.", cur_nickname, nick_name); 
-
-            //write message to server output
-            write(1, nickname_msg, sizeof(nickname_msg)); 
-            write(1, "\n", 1); 
-
-            //send nickname update message to all clients 
-            send_all(nickname_msg, sizeof(nickname_msg));
-
-            //change nickname in struct and clear msgs 
-            change_nickname(client_data, nick_name);
-            memset(nickname_msg, 0, sizeof(nickname_msg)); 
-            memset(message, 0, BUF_SIZE); 
+            nickname_handler(client_data, message, cur_nickname); 
             continue; 
         }
-
-        //send client message to all clients 
-        char msg[sizeof(cur_nickname) + bytes_received + 1];
+        //otherwise send client message to all clients 
+        char msg[sizeof(cur_nickname) + bytes_recieved + 1];
         snprintf(msg, sizeof(msg), "%s: %s", cur_nickname, message); 
         send_all(msg, sizeof(msg)); 
 
@@ -172,25 +156,12 @@ reciever(void *client) {
         memset(msg, 0, sizeof(msg)); 
         memset(message, 0, BUF_SIZE); 
     }
-    //remove client from linked list and get nickname prior to removing node
+    //if exiting, remove client from linked list and get nickname prior to removing node
     snprintf(cur_nickname, 45, "%s", client_data->nickname); 
     remove_client(conn_fd); 
 
-    //print disconnection in server
-    char discon_msg[sizeof(cur_nickname) + 23]; 
-    snprintf(discon_msg, sizeof(discon_msg), "Lost connection from %s.\n", cur_nickname); 
-    write(1, discon_msg, sizeof(discon_msg)); 
-
-    //send disconnection to all other clients-- conditional for whether nickname was created
-    if(strncmp(cur_nickname, "User unknown", 12) == 0) {
-        char client_msg[sizeof(cur_nickname) + 19]; 
-        snprintf(client_msg, sizeof(client_msg), "%s has disconnected.", cur_nickname);
-        send_all(client_msg, sizeof(client_msg)); 
-    } else {
-        char client_msg[sizeof(cur_nickname) + sizeof(ip) + sizeof(port) + 28]; 
-        snprintf(client_msg, sizeof(client_msg), "User %s (%s:%s) has disconnected.", cur_nickname, ip, port); 
-        send_all(client_msg, sizeof(client_msg));    
-    }
+    //call discon handler 
+    discon_handler(cur_nickname, ip, port); 
     return NULL; 
 }
 
@@ -206,7 +177,7 @@ send_all(char *msg, int size) {
         if((send(cur_client->fd, msg, size, 0)) == -1) {
             perror("send");
             pthread_mutex_unlock(&mutex); 
-            exit(5); 
+            exit(6); 
         } 
     }
     pthread_mutex_unlock(&mutex);
@@ -276,6 +247,45 @@ change_nickname(struct client *client_data, char *nick_name) {
     snprintf(client_data->nickname, 45, "%s", nick_name); 
     pthread_mutex_unlock(&mutex);
     return NULL; 
+}
+
+void
+nickname_handler(struct client *client_data, char *message, char *cur_nickname) {
+    //parse out nickname 
+    char *nick_name;
+    nick_name = (strchr(message, ' ') + 1); 
+
+    //compose nickname message
+    char nickname_msg[sizeof(cur_nickname) + sizeof(nick_name) + 50]; 
+    snprintf(nickname_msg, sizeof(nickname_msg), "%s is now known as %s.", cur_nickname, nick_name); 
+
+    //print message to server output
+    printf("%s\n", nickname_msg); 
+
+    //send nickname update message to all clients 
+    send_all(nickname_msg, sizeof(nickname_msg));
+
+    //change nickname in struct
+    change_nickname(client_data, nick_name);
+    return; 
+}
+
+void 
+discon_handler(char *cur_nickname, char *ip, char *port) {
+    char discon_msg[sizeof(cur_nickname) + 50]; 
+    snprintf(discon_msg, sizeof(discon_msg), "Lost connection from %s.\n", cur_nickname); 
+    printf("%s", discon_msg); 
+
+    //send disconnection to all other clients-- conditional for whether nickname was created
+    if(strncmp(cur_nickname, "User unknown", 12) == 0) {
+        char client_msg[sizeof(cur_nickname) + 50]; 
+        snprintf(client_msg, sizeof(client_msg), "%s has disconnected.", cur_nickname);
+        send_all(client_msg, sizeof(client_msg)); 
+    } else {
+        char client_msg[sizeof(cur_nickname) + sizeof(ip) + sizeof(port) + 50]; 
+        snprintf(client_msg, sizeof(client_msg), "User %s (%s:%s) has disconnected.", cur_nickname, ip, port); 
+        send_all(client_msg, sizeof(client_msg));    
+    }
 }
 
 void *
