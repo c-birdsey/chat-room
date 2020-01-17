@@ -2,8 +2,6 @@
 //cs315 systems programming 
 //assignment 7: chat-client 
 
-/****** HOW TO TERMINATE IF ONE OF THE THREADS TERMINATES ********/
-
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
